@@ -63,10 +63,3 @@ pip install -r requirements.txt
 export API_BASE=http://127.0.0.1:8000
 streamlit run app.py
 ```
-
----
-
-##  Endpoints
-### Documentação (Swagger)
-Consulte e teste todos os endpoints no Swagger:
-**http://127.0.0.1:8000/docs#/**
