@@ -2,16 +2,13 @@
 .venv/
 venv/
 
-# Python
+# Python cache/artefatos
 __pycache__/
+dist/
+build/
 
-#Banco de dados
-banco.db
+services/api/banco.db
 .env
 *.env
+.env.*
 
-
-# --- Logs & runtime ---
-*.log
-logs/
-uvicorn*.log

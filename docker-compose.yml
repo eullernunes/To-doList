@@ -1,0 +1,32 @@
+services:
+  api:
+    build: ./services/api
+    container_name: todolist-api
+    env_file:
+      - ./services/api/.env
+    volumes:
+      - ./services/api:/app
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "
+      cd /app &&
+      alembic upgrade head &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app
+      "
+    restart: unless-stopped
+
+  web:
+    build: ./services/web
+    container_name: todolist-web
+    environment:
+      - API_BASE=http://api:8000
+      - STREAMLIT_SERVER_PORT=5173
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+    volumes:
+      - ./services/web:/app
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+    restart: unless-stopped
