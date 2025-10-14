@@ -9,7 +9,6 @@ API de tarefas com **FastAPI + JWT** e **front Streamlit**. Monorepo orquestrado
 - **Criar** e **listar** tarefas do usuário autenticado
 - Banco **SQLite** com migrações via **Alembic**
 - Docker por serviço (**API** e **Web**)
-- **Docs automáticos** da API em **Swagger** (`/docs`) e **Redoc** (`/redoc`)
 
 ---
 
