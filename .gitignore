@@ -1,14 +1,17 @@
-__pycache__/
-*.py[cod]
-*$py.class
-
-
+# venv
 .venv/
 venv/
 
-.vscode/
-*.db
+# Python
+__pycache__/
 
-
+#Banco de dados
+banco.db
 .env
-.env.*
+*.env
+
+
+# --- Logs & runtime ---
+*.log
+logs/
+uvicorn*.log
