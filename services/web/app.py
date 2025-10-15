@@ -7,6 +7,7 @@ API_BASE = os.getenv("API_BASE", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="To-doList", page_icon="📝", layout="centered")
 
+# ---- session state ----
 if "token" not in st.session_state:
     st.session_state.token = None
 if "email" not in st.session_state:
@@ -17,7 +18,15 @@ if "editing_task_id" not in st.session_state:
     st.session_state.editing_task_id = None
 if "confirm_delete_id" not in st.session_state:
     st.session_state.confirm_delete_id = None
+if "confirm_delete_name" not in st.session_state:
+    st.session_state.confirm_delete_name = ""
+if "_create_defaults" not in st.session_state:
+    st.session_state._create_defaults = {"name": "", "description": "", "date": date.today()}
 
+# detecção de suporte a st.dialog (Streamlit 1.31+)
+HAS_DIALOG = hasattr(st, "dialog")
+
+# ---- http client / API ----
 def client(token: str | None = None) -> httpx.Client:
     headers = {"Content-Type": "application/json"}
     if token:
@@ -72,9 +81,91 @@ def delete_task(token: str, task_id: int):
             return True, "Tarefa excluída!"
         return False, r.json().get("detail", r.text)
 
+# ---- dialogs (modais) ----
+def _create_form_ui(prefix="create"):
+    # usa defaults do session_state para manter valores se o usuário fechar/abrir
+    name = st.text_input("Nome", value=st.session_state._create_defaults.get("name", ""), key=f"{prefix}_name")
+    d = st.date_input("Data", value=st.session_state._create_defaults.get("date", date.today()),
+                      format="YYYY-MM-DD", key=f"{prefix}_date")
+    description = st.text_area("Descrição", value=st.session_state._create_defaults.get("description", ""),
+                               height=100, key=f"{prefix}_desc")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        submit = st.button("Salvar", use_container_width=True, key=f"{prefix}_submit")
+    with col_b:
+        cancel = st.button("Cancelar", use_container_width=True, key=f"{prefix}_cancel")
+    return submit, cancel, name, description, d
+
+def _create_dialog_fallback():
+    # fallback em versões antigas do Streamlit sem st.dialog
+    with st.container(border=True):
+        st.subheader("Nova tarefa")
+        submit, cancel, name, description, d = _create_form_ui(prefix="create_fb")
+        if cancel:
+            st.session_state.show_create = False
+            st.stop()
+        if submit:
+            if not name.strip():
+                st.warning("Informe um nome.")
+            else:
+                ok, msg = create_task(st.session_state.token, name.strip(), description.strip(), d)
+                if ok:
+                    st.success(str(msg))
+                    st.session_state.show_create = False
+                    # limpa defaults
+                    st.session_state._create_defaults = {"name": "", "description": "", "date": date.today()}
+                    st.rerun()
+                else:
+                    st.error(str(msg))
+
+if HAS_DIALOG:
+    @st.dialog("Nova tarefa", width="small")
+    def new_task_dialog():
+        submit, cancel, name, description, d = _create_form_ui(prefix="create_md")
+        if cancel:
+            st.session_state.show_create = False
+            st.rerun()
+        if submit:
+            if not name.strip():
+                st.warning("Informe um nome.")
+                st.stop()
+            ok, msg = create_task(st.session_state.token, name.strip(), description.strip(), d)
+            if ok:
+                st.success(str(msg))
+                st.session_state.show_create = False
+                st.session_state._create_defaults = {"name": "", "description": "", "date": date.today()}
+                st.rerun()
+            else:
+                st.error(str(msg))
+
+    @st.dialog("Confirmar exclusão", width="small")
+    def confirm_delete_dialog():
+        st.write(f"Tem certeza que deseja excluir **{st.session_state.confirm_delete_name}**?")
+        col1, col2 = st.columns(2)
+        with col1:
+            yes = st.button("❌ Confirmar", use_container_width=True, key="delete_yes_md")
+        with col2:
+            no = st.button("↩️ Cancelar", use_container_width=True, key="delete_no_md")
+
+        if no:
+            st.session_state.confirm_delete_id = None
+            st.session_state.confirm_delete_name = ""
+            st.rerun()
+
+        if yes:
+            ok_del, msg_del = delete_task(st.session_state.token, st.session_state.confirm_delete_id)
+            if ok_del:
+                st.success(str(msg_del))
+                st.session_state.confirm_delete_id = None
+                st.session_state.confirm_delete_name = ""
+                st.rerun()
+            else:
+                st.error(str(msg_del))
+
 # ---------- UI ----------
 st.title("📝 To-doList")
 
+# ---- auth ----
 if not st.session_state.token:
     tab_login, tab_signup = st.tabs(["Entrar", "Criar conta"])
 
@@ -121,44 +212,21 @@ else:
 
     actions = st.columns([1, 1, 1])
     with actions[0]:
-        if not st.session_state.show_create and st.session_state.editing_task_id is None:
-            if st.button("➕ Nova tarefa", use_container_width=True):
-                st.session_state.show_create = True
-                st.rerun()
+        if st.button("➕ Nova tarefa", use_container_width=True):
+            st.session_state.show_create = True
+            st.rerun()
     with actions[1]:
         if st.button("🔄 Recarregar", use_container_width=True):
             st.rerun()
     with actions[2]:
         pass
 
+    # abre o modal de criação (ou fallback)
     if st.session_state.show_create:
-        with st.container(border=True):
-            st.subheader("Nova tarefa")
-            with st.form("form-create", clear_on_submit=False):
-                name = st.text_input("Nome")
-                d = st.date_input("Data", value=date.today(), format="YYYY-MM-DD")
-                description = st.text_area("Descrição", height=100)
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    submit = st.form_submit_button("Salvar", use_container_width=True)
-                with col_b:
-                    cancel = st.form_submit_button("Cancelar", use_container_width=True)
-
-            if cancel:
-                st.session_state.show_create = False
-                st.experimental_rerun()
-
-            if submit:
-                if not name.strip():
-                    st.warning("Informe um nome.")
-                else:
-                    ok, msg = create_task(st.session_state.token, name.strip(), description.strip(), d)
-                    if ok:
-                        st.success(str(msg))
-                        st.session_state.show_create = False
-                        st.rerun()
-                    else:
-                        st.error(str(msg))
+        if HAS_DIALOG:
+            new_task_dialog()
+        else:
+            _create_dialog_fallback()
 
     st.subheader("Minhas tarefas")
     ok, tasks = list_tasks(st.session_state.token)
@@ -187,24 +255,23 @@ else:
                                 st.session_state._edit_date = date.today()
                             st.session_state._edit_state = (t.get("state") or "PENDENTE")
                             st.rerun()
+
                     with header_cols[2]:
-                        if st.session_state.confirm_delete_id == t["id"]:
-                            if st.button("❌ Confirmar", key=f"confirm_{t['id']}", use_container_width=True):
-                                ok_del, msg_del = delete_task(st.session_state.token, t["id"])
-                                if ok_del:
-                                    st.success(str(msg_del))
-                                    st.session_state.confirm_delete_id = None
-                                    st.rerun()
-                                else:
-                                    st.error(str(msg_del))
-                            if st.button("↩️ Cancelar", key=f"cancel_del_{t['id']}", use_container_width=True):
-                                st.session_state.confirm_delete_id = None
-                                st.rerun()
-                        else:
-                            if st.button("🗑️ Excluir", key=f"del_{t['id']}", use_container_width=True):
-                                st.session_state.confirm_delete_id = t["id"]
+                        if st.button("🗑️ Excluir", key=f"del_{t['id']}", use_container_width=True):
+                            st.session_state.confirm_delete_id = t["id"]
+                            st.session_state.confirm_delete_name = t["name"]
+                            if HAS_DIALOG:
+                                st.rerun()  # para abrir o dialog logo abaixo
+                            else:
+                                # fallback simples: mostrar botões inline (último recurso)
+                                st.session_state._fallback_inline_confirm = True
                                 st.rerun()
 
+                    # abre o modal de confirmação se necessário
+                    if HAS_DIALOG and st.session_state.confirm_delete_id == t["id"]:
+                        confirm_delete_dialog()
+
+                    # edição inline (mantida)
                     if st.session_state.editing_task_id == t["id"]:
                         with st.form(f"form-edit-{t['id']}", clear_on_submit=False):
                             name_ed = st.text_input("Nome", value=st.session_state.get("_edit_name", t["name"]))
@@ -254,3 +321,28 @@ else:
                     else:
                         st.caption(t.get("description") or "—")
                         st.text(f"Estado: {t.get('state') or 'PENDENTE'} | Data: {t.get('date') or '—'}")
+
+            # fallback para confirmação inline (sem st.dialog)
+            if not HAS_DIALOG and st.session_state.get("_fallback_inline_confirm") and st.session_state.confirm_delete_id:
+                with st.container(border=True):
+                    st.write(f"Confirmar exclusão de **{st.session_state.confirm_delete_name}**?")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        yes = st.button("❌ Confirmar", use_container_width=True, key="delete_yes_fb")
+                    with c2:
+                        no = st.button("↩️ Cancelar", use_container_width=True, key="delete_no_fb")
+                    if no:
+                        st.session_state.confirm_delete_id = None
+                        st.session_state.confirm_delete_name = ""
+                        st.session_state._fallback_inline_confirm = False
+                        st.rerun()
+                    if yes:
+                        ok_del, msg_del = delete_task(st.session_state.token, st.session_state.confirm_delete_id)
+                        if ok_del:
+                            st.success(str(msg_del))
+                            st.session_state.confirm_delete_id = None
+                            st.session_state.confirm_delete_name = ""
+                            st.session_state._fallback_inline_confirm = False
+                            st.rerun()
+                        else:
+                            st.error(str(msg_del))
