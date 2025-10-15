@@ -1,7 +1,7 @@
 import os
 import streamlit as st
 import httpx
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 API_BASE = os.getenv("API_BASE", "http://127.0.0.1:8000")
 
@@ -22,11 +22,15 @@ if "confirm_delete_name" not in st.session_state:
     st.session_state.confirm_delete_name = ""
 if "_create_defaults" not in st.session_state:
     st.session_state._create_defaults = {"name": "", "description": "", "date": date.today()}
+if "_edit_defaults" not in st.session_state:
+    st.session_state._edit_defaults = {"name": "", "description": "", "date": date.today(), "state": "PENDENTE"}
+if "favorites" not in st.session_state:
+    st.session_state.favorites = set()  # ids favoritos (somente front por enquanto)
 
-# detecção de suporte a st.dialog (Streamlit 1.31+)
+# suporte a modais nativos
 HAS_DIALOG = hasattr(st, "dialog")
 
-# ---- http client / API ----
+# ---------- HTTP / API ----------
 def client(token: str | None = None) -> httpx.Client:
     headers = {"Content-Type": "application/json"}
     if token:
@@ -81,9 +85,64 @@ def delete_task(token: str, task_id: int):
             return True, "Tarefa excluída!"
         return False, r.json().get("detail", r.text)
 
-# ---- dialogs (modais) ----
+# ---------- Helpers de UI / Filtro / Ordenação ----------
+def _parse_date_safe(dstr: str | None):
+    try:
+        return datetime.strptime(dstr, "%Y-%m-%d").date() if dstr else None
+    except Exception:
+        return None
+
+def _matches_search(t: dict, q: str) -> bool:
+    if not q:
+        return True
+    q = q.lower().strip()
+    return q in (t.get("name","").lower()) or q in (t.get("description","") or "").lower()
+
+def _apply_filter(tasks: list[dict], view: str) -> list[dict]:
+    today = date.today()
+    start_week = today - timedelta(days=today.weekday())
+    end_week = start_week + timedelta(days=6)
+
+    out = []
+    for t in tasks:
+        d = _parse_date_safe(t.get("date"))
+        state = (t.get("state") or "PENDENTE").upper()
+        is_fav = t.get("id") in st.session_state.favorites
+
+        if view == "Todas":
+            pass
+        elif view == "Favoritas" and not is_fav:
+            continue
+        elif view == "Hoje" and d != today:
+            continue
+        elif view == "Atrasadas" and (d is None or d >= today):
+            continue
+        elif view == "Esta semana":
+            if d is None or not (start_week <= d <= end_week):
+                continue
+        elif view == "Concluídas" and state != "CONCLUIDA":
+            continue
+        elif view == "Em andamento" and state != "ANDAMENTO":
+            continue
+        elif view == "Pendentes" and state != "PENDENTE":
+            continue
+
+        out.append(t)
+    return out
+
+def _apply_sort(tasks: list[dict], sort_by: str) -> list[dict]:
+    if sort_by == "Data (asc)":
+        return sorted(tasks, key=lambda t: (_parse_date_safe(t.get("date")) or date.max, t.get("name","").lower()))
+    if sort_by == "Data (desc)":
+        return sorted(tasks, key=lambda t: (_parse_date_safe(t.get("date")) or date.min, t.get("name","").lower()), reverse=True)
+    if sort_by == "Nome A→Z":
+        return sorted(tasks, key=lambda t: t.get("name","").lower())
+    if sort_by == "Nome Z→A":
+        return sorted(tasks, key=lambda t: t.get("name","").lower(), reverse=True)
+    return tasks
+
+# ---------- Form UIs ----------
 def _create_form_ui(prefix="create"):
-    # usa defaults do session_state para manter valores se o usuário fechar/abrir
     name = st.text_input("Nome", value=st.session_state._create_defaults.get("name", ""), key=f"{prefix}_name")
     d = st.date_input("Data", value=st.session_state._create_defaults.get("date", date.today()),
                       format="YYYY-MM-DD", key=f"{prefix}_date")
@@ -96,8 +155,29 @@ def _create_form_ui(prefix="create"):
         cancel = st.button("Cancelar", use_container_width=True, key=f"{prefix}_cancel")
     return submit, cancel, name, description, d
 
+def _edit_form_ui(prefix="edit"):
+    name = st.text_input("Nome", value=st.session_state._edit_defaults.get("name", ""), key=f"{prefix}_name")
+    d = st.date_input("Data", value=st.session_state._edit_defaults.get("date", date.today()),
+                      format="YYYY-MM-DD", key=f"{prefix}_date")
+    description = st.text_area("Descrição", value=st.session_state._edit_defaults.get("description", ""),
+                               height=100, key=f"{prefix}_desc")
+    state = st.selectbox(
+        "Estado",
+        options=["PENDENTE", "ANDAMENTO", "CONCLUIDA"],
+        index=["PENDENTE", "ANDAMENTO", "CONCLUIDA"].index(
+            st.session_state._edit_defaults.get("state", "PENDENTE")
+        ),
+        key=f"{prefix}_state"
+    )
+    col_a, col_b = st.columns(2)
+    with col_a:
+        submit = st.button("Salvar alterações", use_container_width=True, key=f"{prefix}_submit")
+    with col_b:
+        cancel = st.button("Cancelar", use_container_width=True, key=f"{prefix}_cancel")
+    return submit, cancel, name, description, d, state
+
+# ---------- Dialogs (modais) ----------
 def _create_dialog_fallback():
-    # fallback em versões antigas do Streamlit sem st.dialog
     with st.container(border=True):
         st.subheader("Nova tarefa")
         submit, cancel, name, description, d = _create_form_ui(prefix="create_fb")
@@ -112,11 +192,29 @@ def _create_dialog_fallback():
                 if ok:
                     st.success(str(msg))
                     st.session_state.show_create = False
-                    # limpa defaults
                     st.session_state._create_defaults = {"name": "", "description": "", "date": date.today()}
                     st.rerun()
                 else:
                     st.error(str(msg))
+
+def _edit_dialog_fallback(task_id: int):
+    with st.container(border=True):
+        st.subheader("Editar tarefa")
+        submit, cancel, name, description, d, state = _edit_form_ui(prefix="edit_fb")
+        if cancel:
+            st.session_state.editing_task_id = None
+            st.stop()
+        if submit:
+            ok_upd, msg_upd = update_task(
+                st.session_state.token, task_id,
+                name=name.strip(), description=description.strip(), d=d, state=state
+            )
+            if ok_upd:
+                st.success(str(msg_upd))
+                st.session_state.editing_task_id = None
+                st.rerun()
+            else:
+                st.error(str(msg_upd))
 
 if HAS_DIALOG:
     @st.dialog("Nova tarefa", width="small")
@@ -162,10 +260,28 @@ if HAS_DIALOG:
             else:
                 st.error(str(msg_del))
 
+    @st.dialog("Editar tarefa", width="small")
+    def edit_task_dialog():
+        submit, cancel, name, description, d, state = _edit_form_ui(prefix="edit_md")
+        if cancel:
+            st.session_state.editing_task_id = None
+            st.rerun()
+        if submit:
+            ok_upd, msg_upd = update_task(
+                st.session_state.token,
+                st.session_state.editing_task_id,
+                name=name.strip(), description=description.strip(), d=d, state=state
+            )
+            if ok_upd:
+                st.success(str(msg_upd))
+                st.session_state.editing_task_id = None
+                st.rerun()
+            else:
+                st.error(str(msg_upd))
+
 # ---------- UI ----------
 st.title("📝 To-doList")
 
-# ---- auth ----
 if not st.session_state.token:
     tab_login, tab_signup = st.tabs(["Entrar", "Criar conta"])
 
@@ -201,10 +317,10 @@ if not st.session_state.token:
                     st.error(str(data))
 
 else:
-    col_left, col_right = st.columns([1, 1])
-    with col_left:
+    c1, c2 = st.columns([1, 1])
+    with c1:
         st.caption(f"Logado: {st.session_state.email}")
-    with col_right:
+    with c2:
         if st.button("Sair", use_container_width=True):
             st.session_state.token = None
             st.session_state.email = ""
@@ -221,7 +337,17 @@ else:
     with actions[2]:
         pass
 
-    # abre o modal de criação (ou fallback)
+    with st.sidebar:
+        st.header("Filtros")
+        view = st.radio(
+            "Lista",
+            ["Todas", "Favoritas", "Hoje", "Atrasadas", "Esta semana", "Concluídas", "Em andamento", "Pendentes"],
+            index=0
+        )
+        search = st.text_input("Buscar por nome/descrição", placeholder="ex.: relatório, compra, estudo")
+        sort_by = st.selectbox("Ordenar por", ["Data (asc)", "Data (desc)", "Nome A→Z", "Nome Z→A"], index=0)
+        st.caption("Dica: clique na ☆ para marcar como favorita.")
+
     if st.session_state.show_create:
         if HAS_DIALOG:
             new_task_dialog()
@@ -236,94 +362,59 @@ else:
         if not tasks:
             st.info("Nenhuma tarefa.")
         else:
-            for t in tasks:
+            tasks_filtered = _apply_filter(tasks, view)
+            tasks_filtered = [t for t in tasks_filtered if _matches_search(t, search)]
+            tasks_filtered = _apply_sort(tasks_filtered, sort_by)
+
+            st.caption(f"Exibindo {len(tasks_filtered)} de {len(tasks)} tarefas")
+
+            for t in tasks_filtered:
                 with st.container(border=True):
-                    header_cols = st.columns([6, 2, 2])
+                    header_cols = st.columns([0.6, 5.4, 2, 2])
                     with header_cols[0]:
-                        st.markdown(f"**{t['name']}**")
-                    with header_cols[1]:
-                        if st.button("✏️ Editar", key=f"edit_{t['id']}", use_container_width=True):
-                            st.session_state.editing_task_id = t["id"]
-                            st.session_state._edit_name = t["name"]
-                            st.session_state._edit_description = t.get("description") or ""
-                            try:
-                                dval = t.get("date")
-                                st.session_state._edit_date = (
-                                    datetime.strptime(dval, "%Y-%m-%d").date() if dval else date.today()
-                                )
-                            except Exception:
-                                st.session_state._edit_date = date.today()
-                            st.session_state._edit_state = (t.get("state") or "PENDENTE")
+                        is_fav = t["id"] in st.session_state.favorites
+                        star = "⭐" if is_fav else "☆"
+                        if st.button(star, key=f"fav_{t['id']}", use_container_width=True):
+                            if is_fav:
+                                st.session_state.favorites.discard(t["id"])
+                            else:
+                                st.session_state.favorites.add(t["id"])
                             st.rerun()
 
+                    with header_cols[1]:
+                        st.markdown(f"**{t['name']}**")
+
                     with header_cols[2]:
+                        if st.button("✏️ Editar", key=f"edit_{t['id']}", use_container_width=True):
+                            st.session_state._edit_defaults = {
+                                "name": t["name"],
+                                "description": t.get("description") or "",
+                                "date": (_parse_date_safe(t.get("date")) or date.today()),
+                                "state": t.get("state") or "PENDENTE",
+                            }
+                            st.session_state.editing_task_id = t["id"]
+                            st.rerun()
+
+                    with header_cols[3]:
                         if st.button("🗑️ Excluir", key=f"del_{t['id']}", use_container_width=True):
                             st.session_state.confirm_delete_id = t["id"]
                             st.session_state.confirm_delete_name = t["name"]
-                            if HAS_DIALOG:
-                                st.rerun()  # para abrir o dialog logo abaixo
-                            else:
-                                # fallback simples: mostrar botões inline (último recurso)
-                                st.session_state._fallback_inline_confirm = True
-                                st.rerun()
-
-                    # abre o modal de confirmação se necessário
-                    if HAS_DIALOG and st.session_state.confirm_delete_id == t["id"]:
-                        confirm_delete_dialog()
-
-                    # edição inline (mantida)
-                    if st.session_state.editing_task_id == t["id"]:
-                        with st.form(f"form-edit-{t['id']}", clear_on_submit=False):
-                            name_ed = st.text_input("Nome", value=st.session_state.get("_edit_name", t["name"]))
-                            d_ed = st.date_input(
-                                "Data",
-                                value=st.session_state.get("_edit_date", date.today()),
-                                format="YYYY-MM-DD"
-                            )
-                            description_ed = st.text_area(
-                                "Descrição",
-                                value=st.session_state.get("_edit_description", t.get("description") or ""),
-                                height=100
-                            )
-                            state_ed = st.selectbox(
-                                "Estado",
-                                options=["PENDENTE", "ANDAMENTO", "CONCLUIDA"],
-                                index=["PENDENTE", "ANDAMENTO", "CONCLUIDA"].index(
-                                    (st.session_state.get("_edit_state") or "PENDENTE")
-                                ),
-                            )
-
-                            col_save, col_cancel = st.columns(2)
-                            with col_save:
-                                submit_edit = st.form_submit_button("Salvar alterações", use_container_width=True)
-                            with col_cancel:
-                                cancel_edit = st.form_submit_button("Cancelar", use_container_width=True)
-
-                        if cancel_edit:
-                            st.session_state.editing_task_id = None
                             st.rerun()
 
-                        if submit_edit:
-                            ok_upd, msg_upd = update_task(
-                                st.session_state.token,
-                                t["id"],
-                                name=name_ed.strip(),
-                                description=description_ed.strip(),
-                                d=d_ed,
-                                state=state_ed,
-                            )
-                            if ok_upd:
-                                st.success(str(msg_upd))
-                                st.session_state.editing_task_id = None
-                                st.rerun()
-                            else:
-                                st.error(str(msg_upd))
-                    else:
-                        st.caption(t.get("description") or "—")
-                        st.text(f"Estado: {t.get('state') or 'PENDENTE'} | Data: {t.get('date') or '—'}")
+                    st.caption(t.get("description") or "—")
+                    st.text(f"Estado: {t.get('state') or 'PENDENTE'} | Data: {t.get('date') or '—'}")
 
-            # fallback para confirmação inline (sem st.dialog)
-            if not HAS_DIALOG and st.session_state.get("_fallback_inline_confirm") and st.session_state.confirm_delete_id:
+            # modais pendentes
+            if st.session_state.editing_task_id:
+                if HAS_DIALOG:
+                    edit_task_dialog()
+                else:
+                    _edit_dialog_fallback(st.session_state.editing_task_id)
+
+            if st.session_state.confirm_delete_id and HAS_DIALOG:
+                confirm_delete_dialog()
+            elif st.session_state.confirm_delete_id and not HAS_DIALOG:
+                # fallback inline para confirmação
                 with st.container(border=True):
                     st.write(f"Confirmar exclusão de **{st.session_state.confirm_delete_name}**?")
                     c1, c2 = st.columns(2)
@@ -334,7 +425,6 @@ else:
                     if no:
                         st.session_state.confirm_delete_id = None
                         st.session_state.confirm_delete_name = ""
-                        st.session_state._fallback_inline_confirm = False
                         st.rerun()
                     if yes:
                         ok_del, msg_del = delete_task(st.session_state.token, st.session_state.confirm_delete_id)
@@ -342,7 +432,6 @@ else:
                             st.success(str(msg_del))
                             st.session_state.confirm_delete_id = None
                             st.session_state.confirm_delete_name = ""
-                            st.session_state._fallback_inline_confirm = False
                             st.rerun()
                         else:
                             st.error(str(msg_del))
