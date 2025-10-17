@@ -13,7 +13,7 @@ def matches_search(t: Dict, q: str) -> bool:
     q = q.lower().strip()
     return q in (t.get("name","").lower()) or q in (t.get("description","") or "").lower()
 
-def apply_filter(tasks: List[Dict], view: str, favorites: set[int]) -> List[Dict]:
+def apply_filter(tasks: List[Dict], view: str) -> List[Dict]:
     today = date.today()
     start_week = today - timedelta(days=today.weekday())
     end_week = start_week + timedelta(days=6)
@@ -22,12 +22,9 @@ def apply_filter(tasks: List[Dict], view: str, favorites: set[int]) -> List[Dict
     for t in tasks:
         d = parse_date_safe(t.get("date"))
         state = (t.get("state") or "PENDENTE").upper()
-        is_fav = t.get("id") in favorites
 
         if view == "Todas":
             pass
-        elif view == "Prioridade" and not is_fav:
-            continue
         elif view == "Hoje" and d != today:
             continue
         elif view == "Esta semana":

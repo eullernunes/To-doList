@@ -49,20 +49,22 @@ async def list_my_tasks(session: Session = Depends(get_session),user: User = Dep
         ],
     }
 
+
+# O usuário pode mandr qualquer combinação dos campos do schema TaskUpdateSchema
+# por isso usei exclude_unset=True para pegar apenas os campos que vieram na requisição
+# O data = task_schema.model_dump(exclude_unset=True) cria um dicionário com os campos que vieram na requisição
+
 @task_router.patch("/{task_id}")
 async def update_task(task_id: int, task_schema: TaskUpdateSchema, session: Session = Depends(get_session), user: User = Depends(verify_token)):
     
     task = session.get(Task, task_id)
 
-    if not task:
+    if task is None:
         raise HTTPException(status_code=404, detail="Tarefa não encontrada")
     
     if task.user_id != user.id:
         raise HTTPException(status_code=403, detail="Você não tem permissão para alterar esta task")
     
-    # O usuário pode mandr qualquer combinação dos campos do schema TaskUpdateSchema
-    # por isso usei exclude_unset=True para pegar apenas os campos que vieram na requisição
-    # O data = task_schema.model_dump(exclude_unset=True) cria um dicionário com os campos que vieram na requisição
     data = task_schema.model_dump(exclude_unset=True)
 
     #Aqui percorre cada par (campo, valor) do dicionário e atualiza o atributo do objeto task com o valor correspondente

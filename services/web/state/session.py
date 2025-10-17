@@ -18,8 +18,6 @@ def init_session_state() -> None:
         st.session_state._create_defaults = {"name": "", "description": "", "date": date.today()}
     if "_edit_defaults" not in st.session_state:
         st.session_state._edit_defaults = {"name": "", "description": "", "date": date.today(), "state": "PENDENTE"}
-    if "favorites" not in st.session_state:
-        st.session_state.favorites = set()
 
 def has_dialog() -> bool:
     import streamlit as st

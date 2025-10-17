@@ -72,12 +72,11 @@ else:
         st.header("Filtros")
         view = st.radio(
             "Lista",
-            ["Todas", "Prioridade", "Hoje", "Esta semana", "Concluídas", "Em andamento", "Pendentes"],
+            ["Todas", "Hoje", "Esta semana", "Concluídas", "Em andamento", "Pendentes"],
             index=0
         )
         search = st.text_input("Buscar por nome/descrição", placeholder="ex.: relatório, compra, estudo")
         sort_by = st.selectbox("Ordenar por", ["Data (asc)", "Data (desc)", "Nome A→Z", "Nome Z→A"], index=0)
-        st.caption("Dica: clique na ☆ para marcar como favorita.")
 
     # modal de criação
     if st.session_state.show_create:
@@ -92,7 +91,7 @@ else:
         if not tasks:
             st.info("Nenhuma tarefa.")
         else:
-            tasks_filtered = apply_filter(tasks, view, st.session_state.favorites)
+            tasks_filtered = apply_filter(tasks, view)
             tasks_filtered = [t for t in tasks_filtered if matches_search(t, search)]
             tasks_filtered = apply_sort(tasks_filtered, sort_by)
 
@@ -100,21 +99,11 @@ else:
 
             for t in tasks_filtered:
                 with st.container(border=True):
-                    header_cols = st.columns([0.6, 5.4, 2, 2])  # [fav, nome, editar, excluir]
+                    header_cols = st.columns([6, 2, 2])  # [fav, nome, editar, excluir]
                     with header_cols[0]:
-                        is_fav = t["id"] in st.session_state.favorites
-                        star = "⭐" if is_fav else "☆"
-                        if st.button(star, key=f"fav_{t['id']}", use_container_width=True):
-                            if is_fav:
-                                st.session_state.favorites.discard(t["id"])
-                            else:
-                                st.session_state.favorites.add(t["id"])
-                            st.rerun()
-
-                    with header_cols[1]:
                         st.markdown(f"**{t['name']}**")
 
-                    with header_cols[2]:
+                    with header_cols[1]:
                         if st.button("✏️ Editar", key=f"edit_{t['id']}", use_container_width=True):
                             st.session_state._edit_defaults = {
                                 "name": t["name"],
@@ -125,7 +114,7 @@ else:
                             st.session_state.editing_task_id = t["id"]
                             st.rerun()
 
-                    with header_cols[3]:
+                    with header_cols[2]:
                         if st.button("🗑️ Excluir", key=f"del_{t['id']}", use_container_width=True):
                             st.session_state.confirm_delete_id = t["id"]
                             st.session_state.confirm_delete_name = t["name"]
